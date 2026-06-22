@@ -1,0 +1,13 @@
+.DS_Store
+*.tmp
+*.log
+
+examples/sample_basic.csv
+examples/sample_headers.csv
+examples/sample_column_mapping.csv
+examples/output.csv
+
+tests/sample_test.csv
+tests/writer_output.csv
+
+.vscode/
