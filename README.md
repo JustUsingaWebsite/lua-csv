@@ -1,625 +1,273 @@
-# lua-csv (Modernized Fork)
+# lua-csv
 
 Fast streaming CSV reader/writer for Lua 5.1–5.4 and LuaJIT.
 
-Supports:
+`lua-csv` supports CSV parsing, header rows, strict validation, embedded quoted newlines, UTF-8 BOM stripping, custom single-character separators, and CSV encoding/writing.
 
-* CSV
-* TSV
-* Pipe-delimited
-* Semicolon-delimited
-* Custom single-character separators
-* Embedded newlines inside quoted fields
-* UTF-8 BOM stripping
-* Streaming large files
-* CSV writing/encoding
-* Strict validation mode
+## Features
 
-***
+- Streaming CSV reader for large files
+- CSV writer and encoder
+- Header-based row access
+- Strict validation mode
+- Embedded newlines inside quoted fields
+- Escaped quote handling
+- UTF-8 BOM stripping
+- CRLF, LF, and CR line endings
+- Custom separators: comma, tab, pipe, semicolon, etc.
+- LuaLS / EmmyLua annotations
 
-# Installation
+## Installation
 
-Put `csv.lua` beside your script.
-
-Example:
+Copy `csv.lua` and the `csv/` folder into your project:
 
 ```text
 project/
-  csv.lua
-  test.lua
+├── csv.lua
+├── csv/
+│   ├── buffer.lua
+│   ├── column_map.lua
+│   ├── encoder.lua
+│   ├── parser.lua
+│   ├── separator.lua
+│   ├── unicode.lua
+│   └── util.lua
+└── main.lua
 ```
 
-Then in Lua:
+Then require it:
 
 ```lua
 local csv = require("csv")
 ```
 
-If Lua cannot find the module, add this before `require()`:
+If Lua cannot find the module, add your project root to `package.path`.
 
 ```lua
-local script_path = debug.getinfo(1, "S").source:sub(2)
-local script_dir = script_path:match("^(.*[\\/])") or ""
-
-package.path = script_dir .. "?.lua;" ..
-               script_dir .. "?\\init.lua;" ..
-               package.path
+package.path = "./?.lua;./?/init.lua;" .. package.path
 ```
 
-***
+## Quick Start
 
-# Quick Start
-
-## Read CSV
+### Read a CSV file
 
 ```lua
 local csv = require("csv")
 
-local f = csv.open("users.csv")
+local file = assert(csv.open("users.csv"))
 
-for row in f:lines() do
+for row in file:lines() do
     print(row[1], row[2], row[3])
 end
 
-f:close()
+file:close()
 ```
 
-***
-
-## Read CSV with headers
-
-CSV:
-
-```csv
-id,name,email
-1,Dunkan,dunkan@example.com
-```
-
-Lua:
+### Read with headers
 
 ```lua
 local csv = require("csv")
 
-local f = csv.open("users.csv", {
-    header = true
-})
+local file = assert(csv.open("users.csv", {
+    header = true,
+    strict = true,
+}))
 
-for row in f:lines() do
-    print(row.id)
-    print(row.name)
-    print(row.email)
+for row in file:lines() do
+    print(row.id, row.name, row.email)
 end
 
-f:close()
+file:close()
 ```
 
-***
+Example CSV:
 
-# API
+```csv
+id,name,email
+1,Daniel,daniel@example.com
+2,Alex,alex@example.com
+```
 
-***
-
-# `csv.open(filename, parameters)`
-
-Open a CSV file from disk.
-
-## Example
+## Decode CSV from a string
 
 ```lua
-local f = csv.open("data.csv")
+local csv = require("csv")
+
+local rows = csv.decode([[
+id,name,role
+1,Daniel,Admin
+2,Alex,Editor
+]], {
+    header = true,
+    strict = true,
+})
+
+for _, row in ipairs(rows) do
+    print(row.id, row.name, row.role)
+end
+```
+
+## Encode CSV
+
+```lua
+local csv = require("csv")
+
+local text = csv.encode({
+    { "id", "name", "note" },
+    { 1, "Daniel", 'hello, "world"' },
+    { 2, "Lua", "line one\nline two" },
+}, {
+    newline = "\n",
+})
+
+print(text)
+```
+
+Output:
+
+```csv
+id,name,note
+1,Daniel,"hello, ""world"""
+2,Lua,"line one
+line two"
+```
+
+## Write a CSV file
+
+```lua
+local csv = require("csv")
+
+local writer = assert(csv.writer("output.csv"))
+
+writer:write({ "id", "name", "email" })
+writer:write({ 1, "Daniel", "daniel@example.com" })
+writer:write({ 2, "Alex", "alex@example.com" })
+
+writer:close()
+```
+
+## Column Mapping
+
+Column mapping lets you map messy headers to cleaner Lua keys and optionally transform values.
+
+```lua
+local csv = require("csv")
+
+local file = assert(csv.open("users.csv", {
+    strict = true,
+
+    columns = {
+        user_id = {
+            name = "User ID",
+            transform = tonumber,
+        },
+
+        first_name = {
+            name = "First Name",
+        },
+
+        active = {
+            name = "Active",
+            transform = function(value)
+                return value == "true"
+            end,
+        },
+    },
+}))
+
+for row in file:lines() do
+    print(row.user_id, row.first_name, row.active)
+end
+
+file:close()
+```
+
+Example CSV:
+
+```csv
+User ID,First Name,Active
+101,Daniel,true
+102,Alex,false
+```
+
+## API
+
+### Reading
+
+```lua
+csv.open(filename, parameters)      -- open CSV file
+csv.openstring(text, parameters)    -- open CSV from string
+csv.decode(text, parameters)        -- decode CSV string into rows
+```
+
+### Reader methods
+
+```lua
+file:lines()    -- iterator over rows
+file:read()     -- read one row
+file:readall()  -- read all rows into memory
+file:close()    -- close file
+file:name()     -- return filename
+```
+
+### Writing
+
+```lua
+csv.encode(rows, parameters)        -- encode rows into CSV text
+csv.encode_row(row, parameters)     -- encode one row
+csv.writer(filename, parameters)    -- create file writer
+```
+
+### Writer methods
+
+```lua
+writer:write(row)
+writer:close()
 ```
 
 ## Parameters
 
 ```lua
 {
-    separator = ",",
-    header = true,
-    strict = true,
-    skip_blank_lines = true,
-    duplicate_headers = "error",
-    buffer_size = 1024 * 1024,
+    separator = ",",              -- single-character separator
+    header = true,                -- use first row as keys
+    strict = true,                -- validate field counts
+    skip_blank_lines = true,      -- skip blank rows
+    duplicate_headers = "error",  -- error on duplicate headers
+    buffer_size = 1024 * 1024,    -- streaming buffer size
+    record_limit = nil,           -- optional max rows to read
+    newline = "\r\n",             -- writer newline
+    columns = nil,                -- optional column mapping
 }
 ```
 
-***
-
-# `csv.openstring(contents, parameters)`
-
-Open CSV from a Lua string.
-
-## Example
+<details>
+<summary>Separator examples</summary>
 
 ```lua
-local f = csv.openstring([[
-id,name
-1,Daniel
-2,Alex
-]], {
-    header = true
-})
+separator = ","   -- CSV
+separator = "\t"  -- TSV
+separator = "|"   -- pipe-delimited
+separator = ";"   -- semicolon-delimited
 ```
 
-***
+Separators must be a single character.
 
-# `csv.use(buffer, parameters)`
+</details>
 
-Use an existing buffer/file-like object.
+## Notes
 
-Advanced/internal usage.
+* UTF-8 BOM is stripped automatically.
+* UTF-16 BOMs are detected but rejected.
+* Multi-character separators are not supported.
+* Rows are returned as strings unless transformed through `columns`.
+* The parser uses coroutines internally for streaming iteration.
+* `file:lines()` yields row data and field position metadata internally.
 
-***
-
-# Reader Methods
-
-***
-
-# `f:lines()`
-
-Iterator over CSV rows.
-
-## Example
-
-```lua
-for row in f:lines() do
-    print(row[1])
-end
-```
-
-***
-
-# `f:read()`
-
-Read a single row.
-
-Returns `nil` at EOF.
-
-## Example
-
-```lua
-local row = f:read()
-
-if row then
-    print(row[1])
-end
-```
-
-***
-
-# `f:readall()`
-
-Read entire CSV into memory.
-
-## Example
-
-```lua
-local rows = f:readall()
-
-for i, row in ipairs(rows) do
-    print(row[1])
-end
-```
-
-***
-
-# `f:close()`
-
-Close the file.
-
-## Example
-
-```lua
-f:close()
-```
-
-***
-
-# Decode API
-
-***
-
-# `csv.decode(string, parameters)`
-
-Decode CSV string directly into rows.
-
-## Example
-
-```lua
-local rows = csv.decode([[
-id,name
-1,Daniel
-]], {
-    header = true
-})
-
-print(rows[1].name)
-```
-
-***
-
-# Writer API
-
-***
-
-# `csv.encode(rows, parameters)`
-
-Convert Lua tables into CSV text.
-
-## Example
-
-```lua
-local csv_text = csv.encode({
-    { "id", "name" },
-    { 1, "Daniel" },
-    { 2, "Alex" },
-})
-
-print(csv_text)
-```
-
-***
-
-# `csv.encode_row(row, parameters)`
-
-Encode a single CSV row.
-
-## Example
-
-```lua
-local row = csv.encode_row({
-    "Daniel",
-    'hello, "world"',
-})
-
-print(row)
-```
-
-Output:
-
-```csv
-Daniel,"hello, ""world"""
-```
-
-***
-
-# `csv.writer(filename, parameters)`
-
-Create CSV writer object.
-
-## Example
-
-```lua
-local out = csv.writer("output.csv")
-
-out:write({ "id", "name" })
-out:write({ 1, "Daniel" })
-out:write({ 2, "Alex" })
-
-out:close()
-```
-
-***
-
-# Writer Methods
-
-***
-
-# `writer:write(row)`
-
-Write one CSV row.
-
-## Example
-
-```lua
-writer:write({
-    1,
-    "Daniel",
-    "Admin"
-})
-```
-
-***
-
-# `writer:close()`
-
-Close writer file.
-
-***
-
-# Parameters
-
-***
-
-# `separator`
-
-Default:
-
-```lua
-","
-```
-
-Supported examples:
-
-```lua
-separator = ","
-separator = "\t"
-separator = "|"
-separator = ";"
-```
-
-Must be a single character.
-
-***
-
-# `header`
-
-Treat first row as column names.
-
-## Example
-
-```lua
-header = true
-```
-
-Then rows become:
-
-```lua
-row.email
-row.first_name
-```
-
-instead of:
-
-```lua
-row[1]
-row[2]
-```
-
-***
-
-# `strict`
-
-Enable stricter CSV validation.
-
-Checks:
-
-* consistent field counts
-* malformed quoted fields
-* unexpected characters after quotes
-
-## Example
-
-```lua
-strict = true
-```
-
-***
-
-# `skip_blank_lines`
-
-Default:
-
-```lua
-true
-```
-
-To preserve blank rows:
-
-```lua
-skip_blank_lines = false
-```
-
-***
-
-# `duplicate_headers`
-
-Default behavior:
-
-* later duplicate overwrites earlier
-
-Strict mode:
-
-```lua
-duplicate_headers = "error"
-```
-
-Example error:
-
-```text
-duplicate header: email
-```
-
-***
-
-# `buffer_size`
-
-Streaming read buffer size.
-
-Default:
-
-```lua
-1024 * 1024
-```
-
-Example:
-
-```lua
-buffer_size = 8 * 1024 * 1024
-```
-
-***
-
-# `columns`
-
-Column mapping / transforms.
-
-## Example
-
-CSV:
-
-```csv
-First Name,Age
-Daniel,30
-```
-
-Lua:
-
-```lua
-local f = csv.open("users.csv", {
-    header = true,
-
-    columns = {
-        first_name = {
-            name = "First Name"
-        },
-
-        age = {
-            transform = tonumber
-        }
-    }
-})
-```
-
-Result:
-
-```lua
-row.first_name
-row.age
-```
-
-***
-
-# Embedded Newlines
-
-Supported.
-
-Example CSV:
-
-```csv
-id,note
-1,"hello
-world"
-```
-
-Works correctly.
-
-***
-
-# Escaped Quotes
-
-Supported.
-
-CSV:
-
-```csv
-name,note
-Dunkan,"hello ""world"""
-```
-
-Result:
-
-```lua
-hello "world"
-```
-
-***
-
-# BOM Handling
-
-Supported:
-
-* UTF-8 BOM stripping
-
-Rejected:
-
-* UTF-16 BOMs
-
-Reason:
-
-This parser does not decode UTF-16.
-
-***
-
-# Supported Lua Versions
-
-Tested with:
+## Supported Lua Versions
 
 * Lua 5.1
 * Lua 5.2
 * Lua 5.3
 * Lua 5.4
 * LuaJIT
-
-***
-
-# Example Full Read
-
-```lua
-local csv = require("csv")
-
-local f = csv.open("sample.csv", {
-    header = true,
-    strict = true,
-})
-
-for row in f:lines() do
-    print(
-        row.user_id,
-        row.first_name,
-        row.last_name,
-        row.email,
-        row.role,
-        row.is_active
-    )
-end
-
-f:close()
-```
-
-***
-
-# Example Full Write
-
-```lua
-local csv = require("csv")
-
-local out = csv.writer("users.csv")
-
-out:write({
-    "user_id",
-    "first_name",
-    "email"
-})
-
-out:write({
-    101,
-    "Dunkan",
-    "dunkan@example.com"
-})
-
-out:close()
-```
-
-***
-
-# Notes
-
-* Streaming parser designed for large files
-* Handles CRLF, LF, and CR line endings
-* Does NOT support true multi-character separators
-* Does NOT decode UTF-16
-* Uses Lua coroutines internally for iteration
-
-***
-
-# Funny Real-World CSV Survival Status
-
-✅ Embedded newlines  
-✅ Escaped quotes  
-✅ Weird line endings  
-✅ UTF-8 BOM  
-✅ Large files  
-✅ Pipe-delimited exports  
-✅ Semicolon Excel exports  
-✅ User-generated garbage CSVs  
-✅ Corporate nonsense exports
