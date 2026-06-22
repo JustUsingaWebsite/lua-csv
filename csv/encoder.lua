@@ -6,11 +6,18 @@ local encoder = {}
 ---@param value any
 ---@param separator string?
 ---@return string
-local function encode_field(value, separator)
+local function encode_field(value, separator, parameters)
+    parameters = parameters or {}
     separator = separator or ","
+
+    if value == nil then
+        value = parameters.nil_value
+    end
+
     value = tostring(value or "")
 
     local must_quote =
+        parameters.quote_all or
         value:find(separator, 1, true) or
         value:find('"', 1, true) or
         value:find("\r", 1, true) or
@@ -40,7 +47,7 @@ function encoder.encode_row(row, parameters)
     local fields = {}
 
     for _, value in ipairs(row) do
-        fields[#fields + 1] = encode_field(value, sep)
+        fields[#fields + 1] = encode_field(value, sep, parameters)
     end
 
     return table.concat(fields, sep)

@@ -17,6 +17,11 @@
 ---@field columns table?
 ---@field column_map CsvColumnMap?
 ---@field newline string?
+---@field quote_all boolean? Quote every written field.
+---@field nil_value any Value used when writing nil fields. Default: "".
+---@field trim_fields boolean? Trim unquoted fields. Default: true.
+---@field empty_as_nil boolean? Convert empty fields to nil when reading.
+---@field encoding '"auto"'|'"utf-8"'|'"utf-16le"'|'"utf-16be"'? Input encoding. Default: "auto".
 
 ---@class CsvFieldPosition
 ---@field line integer

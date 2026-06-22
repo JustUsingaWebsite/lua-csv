@@ -147,7 +147,13 @@ local function separated_values_iterator(buffer, parameters)
             end
         else
             field_end, sep_end, this_sep = field_find(sep, 1)
-            tidy = util.trim_space
+            if parameters.trim_fields == false then
+                tidy = function(s)
+                    return s
+                end
+            else
+                tidy = util.trim_space
+            end
         end
 
         field_end = (field_end or 0) - 1
@@ -166,8 +172,12 @@ local function separated_values_iterator(buffer, parameters)
 
         value = tidy(value)
 
-        if #value > 0 then
+        if value ~= "" then
             nonblanks = true
+        end
+
+        if parameters.empty_as_nil and value == "" then
+            value = nil
         end
 
         field_count = field_count + 1
@@ -337,14 +347,42 @@ end
 ---@param parameters CsvParameters?
 ---@return CsvFile?, string?
 function parser.open(filename, parameters)
+    parameters = parameters or {}
+    parameters.filename = filename
+
     local file, message = io.open(filename, "rb")
 
     if not file then
         return nil, message
     end
 
-    parameters = parameters or {}
-    parameters.filename = filename
+    local requested_encoding = parameters.encoding or "auto"
+
+    -- UTF-8 files still stream.
+    -- UTF-16 files are decoded into a UTF-8 Lua string first.
+    if requested_encoding ~= "utf-8" then
+        local sample = file:read(4) or ""
+
+        file:seek("set", 0)
+
+        local detected = unicode.detect_encoding(sample, requested_encoding)
+
+        if detected == "utf-16le" then
+            local contents = file:read("*a") or ""
+            file:close()
+
+            local decoded = unicode.decode_utf16(contents, "utf-16le")
+
+            return parser.use(decoded, parameters), nil
+        elseif detected == "utf-16be" then
+            local contents = file:read("*a") or ""
+            file:close()
+
+            local decoded = unicode.decode_utf16(contents, "utf-16be")
+
+            return parser.use(decoded, parameters), nil
+        end
+    end
 
     return parser.use(file, parameters), nil
 end
@@ -370,8 +408,19 @@ end
 ---@return CsvFile
 function parser.openstring(filecontents, parameters)
     parameters = parameters or {}
-    parameters.filename = parameters.filename or makename(filecontents)
-    parameters.buffer_size = parameters.buffer_size or #filecontents
+
+    parameters.filename =
+        parameters.filename or makename(filecontents)
+
+    local requested_encoding = parameters.encoding or "auto"
+
+    if requested_encoding ~= "utf-8" then
+        local decoded = unicode.decode_if_needed(filecontents, requested_encoding)
+        filecontents = decoded
+    end
+
+    parameters.buffer_size =
+        parameters.buffer_size or #filecontents
 
     return parser.use(filecontents, parameters)
 end
