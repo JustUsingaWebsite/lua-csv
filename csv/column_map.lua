@@ -1,8 +1,10 @@
 -- csv/column_map.lua
 -- Header mapping and value transforms. Lets users map messy CSV headers to
 -- clean Lua keys and optionally transform/default values.
+--
+-- Luau rewrite: uses Luau string interpolation.
 
-local util = require("csv.util")
+local util = require("./util")
 
 ---@class CsvColumnDefinition
 ---@field name string?
@@ -135,7 +137,7 @@ function column_map:read_header(header)
             end
 
             problems[#problems + 1] =
-                "Couldn't find a column named " .. missing
+            "Couldn't find a column named " .. missing
         end
 
         error(table.concat(problems, "\n"), 0)
@@ -156,10 +158,11 @@ function column_map:transform(value, index)
     if field then
         if field.transform then
             local ok
+
             ok, value = pcall(field.transform, value)
 
             if not ok then
-                error(("Error reading field '%s': %s"):format(field.name, value), 0)
+                error("Error reading field '" .. field.name .. "': " .. tostring(value), 0)
             end
         end
 

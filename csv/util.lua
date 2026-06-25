@@ -1,5 +1,7 @@
 -- csv/util.lua
 -- Small string/pattern helpers used by the parser, encoder, and column mapper.
+--
+-- Luau rewrite: uses Luau string interpolation where applicable.
 
 local util = {}
 
@@ -39,6 +41,40 @@ function util.normalise_string(s)
         :gsub("[^%w%d]+", " ")
         :gsub("^ *(.-) *$", "%1")
     )
+end
+
+---Get the directory portion of a file path.
+---Replaces the common `debug.getinfo(1, "S").source:sub(2)` pattern
+---which is unavailable in Lune.
+---
+---Usage: `local script_dir = util.script_dir()`
+---@return string
+function util.script_dir()
+    -- In Lune, process.cwd and args can help determine the working directory.
+    -- For script-relative paths, Lune resolves requires relative to the script.
+    -- We use the Luau require path resolution instead of debug.getinfo.
+    local ok, process = pcall(function()
+        return require("@lune/process")
+    end)
+
+    if ok then
+        -- Lune: use cwd as the base directory
+        return process.cwd .. "/"
+    end
+
+    -- Fallback: try debug.getinfo if available (standard Lua)
+    local debug_ok, info = pcall(function()
+        return debug.getinfo(2, "S")
+    end)
+
+    if debug_ok and info and info.source then
+        local path = info.source:sub(2)
+        local dir = path:match("^(.*[\\/])") or ""
+        return dir
+    end
+
+    -- Last resort: current directory
+    return "./"
 end
 
 return util

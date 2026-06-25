@@ -3,6 +3,9 @@
 --
 -- The CSV parser itself works on normal Lua strings.
 -- UTF-16 input is decoded into UTF-8 before parsing.
+--
+-- Luau rewrite: uses Luau's built-in `utf8` and `bit32` libraries
+-- instead of hand-rolled UTF-8 encoding and manual bit manipulation.
 
 local unicode = {}
 
@@ -13,35 +16,16 @@ local unicode = {}
 ---| '"utf-16be"'
 
 -------------------------------------------------------------------------------
--- UTF-8 encoding
+-- UTF-8 encoding (now a thin wrapper around Luau's utf8.char)
 -------------------------------------------------------------------------------
 
 ---@param codepoint integer
 ---@return string
 local function codepoint_to_utf8(codepoint)
-    if codepoint <= 0x7F then
-        return string.char(codepoint)
-    elseif codepoint <= 0x7FF then
-        return string.char(
-            0xC0 + math.floor(codepoint / 0x40),
-            0x80 + (codepoint % 0x40)
-        )
-    elseif codepoint <= 0xFFFF then
-        return string.char(
-            0xE0 + math.floor(codepoint / 0x1000),
-            0x80 + (math.floor(codepoint / 0x40) % 0x40),
-            0x80 + (codepoint % 0x40)
-        )
-    elseif codepoint <= 0x10FFFF then
-        return string.char(
-            0xF0 + math.floor(codepoint / 0x40000),
-            0x80 + (math.floor(codepoint / 0x1000) % 0x40),
-            0x80 + (math.floor(codepoint / 0x40) % 0x40),
-            0x80 + (codepoint % 0x40)
-        )
-    end
-
-    error("invalid Unicode codepoint: " .. tostring(codepoint), 0)
+    -- Luau's utf8.char handles all valid Unicode codepoints,
+    -- including the full BMP and supplementary planes.
+    -- No more manual bit-shifting to build UTF-8 bytes.
+    return utf8.char(codepoint)
 end
 
 -------------------------------------------------------------------------------
@@ -122,6 +106,7 @@ end
 
 -------------------------------------------------------------------------------
 -- UTF-16 decoding
+-- Uses Luau's bit32 for clean byte operations and utf8.char for encoding.
 -------------------------------------------------------------------------------
 
 ---@param s string
@@ -135,11 +120,13 @@ local function read_u16(s, pos, endian)
         return nil
     end
 
+    -- Luau's bit32.bor / bit32.lshift are cleaner and faster than
+    -- manual arithmetic, and they clearly express the intent.
     if endian == "le" then
-        return b1 + b2 * 256
+        return bit32.bor(b1, bit32.lshift(b2, 8))
     end
 
-    return b1 * 256 + b2
+    return bit32.bor(bit32.lshift(b1, 8), b2)
 end
 
 ---@param s string
@@ -184,19 +171,24 @@ function unicode.decode_utf16(s, encoding)
 
             pos = pos + 2
 
-            codepoint =
-                0x10000 +
-                ((unit - 0xD800) * 0x400) +
-                (low - 0xDC00)
+            -- bit32 makes surrogate pair arithmetic explicit and safe
+            codepoint = 0x10000
+                + bit32.bor(
+                    bit32.lshift(bit32.band(unit - 0xD800, 0x3FF), 10),
+                    bit32.band(low - 0xDC00, 0x3FF)
+                )
 
         elseif unit >= 0xDC00 and unit <= 0xDFFF then
             error("invalid UTF-16 input: unexpected low surrogate", 0)
         end
 
-        out[#out + 1] = codepoint_to_utf8(codepoint)
+        -- Collect codepoints; we batch-encode with utf8.char at the end
+        out[#out + 1] = codepoint
     end
 
-    return table.concat(out)
+    -- utf8.char accepts multiple codepoints at once — far faster than
+    -- concatenating individual char results with table.concat
+    return utf8.char(table.unpack(out))
 end
 
 ---@param s string

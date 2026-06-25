@@ -40,8 +40,10 @@
 ---@field name fun(self: CsvFile): string
 
 ---@class CsvWriter
----@field file file*
+---@field filename string
+---@field file file*?
 ---@field parameters CsvParameters
+---@field chunks string[]
 ---@field write fun(self: CsvWriter, row: table)
 ---@field close fun(self: CsvWriter)
 

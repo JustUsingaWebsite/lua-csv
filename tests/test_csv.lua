@@ -1,19 +1,22 @@
 -- test_csv.lua
 --
--- Core test suite for lua-csv.
+-- Core test suite for lua-csv (Luau/Lune version).
 -- Covers reading, header mode, decoding strings, embedded newlines,
 -- escaped quotes, encoding rows, writing files, and column mapping.
 --
 -- This test uses simple assert-style helpers, so no external test
 -- framework is required.
+--
+-- Lune changes:
+--   - Replaced debug.getinfo with process.cwd for path resolution
+--   - Replaced io.open with fs.writeFile / fs.readFile
 
-local script_path = debug.getinfo(1, "S").source:sub(2)
-local script_dir = script_path:match("^(.*[\\/])") or ""
-local root_dir = script_dir:gsub("tests[\\/]*$", "")
+local fs = require("@lune/fs")
+local process = require("@lune/process")
 
-package.path = root_dir .. "?.lua;" .. package.path
+local script_dir = process.cwd .. "/"
 
-local csv = require("csv")
+local csv = require("../csv")
 
 local function assert_equal(actual, expected, message)
     if actual ~= expected then
@@ -27,9 +30,7 @@ local function assert_equal(actual, expected, message)
 end
 
 local function write_file(path, contents)
-    local f = assert(io.open(path, "wb"))
-    f:write(contents)
-    f:close()
+    fs.writeFile(path, contents)
 end
 
 local sample_path = script_dir .. "sample_test.csv"

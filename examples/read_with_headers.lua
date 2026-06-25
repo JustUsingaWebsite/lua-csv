@@ -8,24 +8,25 @@
 --     row.email
 --
 -- This is useful when working with structured CSV exports.
+--
+-- Lune changes:
+--   - Replaced debug.getinfo with process.cwd
+--   - Replaced io.open with fs.writeFile
 
-local script_path = debug.getinfo(1, "S").source:sub(2)
-local script_dir = script_path:match("^(.*[\\/])") or ""
-local root_dir = script_dir:gsub("examples[\\/]*$", "")
+local fs = require("@lune/fs")
+local process = require("@lune/process")
 
-package.path = root_dir .. "?.lua;" .. package.path
+local script_dir = process.cwd .. "/"
 
-local csv = require("csv")
+local csv = require("../csv")
 
 local sample_path = script_dir .. "sample_headers.csv"
 
-local f = assert(io.open(sample_path, "wb"))
-f:write([[
+fs.writeFile(sample_path, [[
 id,first_name,last_name,email
 101,Jane,Doe,jane@example.com
 102,John,Smith,john@example.com
 ]])
-f:close()
 
 local file = assert(csv.open(sample_path, {
     header = true,

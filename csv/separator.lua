@@ -1,6 +1,8 @@
 -- csv/separator.lua
 -- Separator guessing helpers. Tries common delimiters and picks the one that
 -- produces the most consistent-looking rows.
+--
+-- No Luau-specific changes needed — Luau's faster VM improves this passively.
 
 local separator = {}
 

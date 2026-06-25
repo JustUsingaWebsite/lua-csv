@@ -1,6 +1,6 @@
 # lua-csv
 
-Fast streaming CSV reader/writer for Lua 5.1–5.4 and LuaJIT.
+Fast streaming CSV reader/writer for Lua 5.1–5.4, LuaJIT, and Luau (Lune).
 
 `lua-csv` supports CSV parsing, header rows, strict validation, embedded quoted newlines, UTF-8 BOM stripping, UTF-16LE/UTF-16BE decoding, custom single-character separators, CSV validation, and CSV encoding/writing.
 
@@ -53,6 +53,24 @@ If Lua cannot find the module, add your project root to `package.path`:
 ```lua
 package.path = "./?.lua;./?/init.lua;" .. package.path
 ```
+
+### Running with Lune
+
+When using [Lune](https://lune-org.github.io), requires are file-relative:
+
+```lua
+local csv = require("./csv")
+-- or from a subdirectory:
+local csv = require("../csv")
+```
+
+Run scripts from the project root:
+
+```bash
+lune run main.lua
+```
+
+> **Important:** Lune resolves file paths relative to your current working directory, not the script location. Always run from the project root so that temp files and fixtures are written to the expected locations.
 
 ## Quick Start
 
@@ -403,6 +421,7 @@ Separators must be a single character.
 * Rows are returned as strings unless transformed through `columns`.
 * The parser uses coroutines internally for streaming iteration.
 * `file:lines()` yields row data and field position metadata internally.
+* When running under Lune, file I/O uses `@lune/fs` and stdin uses `@lune/stdio`. Standard Lua fallbacks (`io.open`) are used when Lune is not available.
 
 ## Supported Lua Versions
 
@@ -411,4 +430,5 @@ Separators must be a single character.
 * Lua 5.3
 * Lua 5.4
 * LuaJIT
+* Luau (via [Lune](https://lune-org.github.io))
 

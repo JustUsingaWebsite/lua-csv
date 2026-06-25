@@ -7,24 +7,25 @@
 --     "true"  -> true
 --
 -- Useful for normalizing messy CSV exports into cleaner Lua tables.
+--
+-- Lune changes:
+--   - Replaced debug.getinfo with process.cwd
+--   - Replaced io.open with fs.writeFile
 
-local script_path = debug.getinfo(1, "S").source:sub(2)
-local script_dir = script_path:match("^(.*[\\/])") or ""
-local root_dir = script_dir:gsub("examples[\\/]*$", "")
+local fs = require("@lune/fs")
+local process = require("@lune/process")
 
-package.path = root_dir .. "?.lua;" .. package.path
+local script_dir = process.cwd .. "/"
 
-local csv = require("csv")
+local csv = require("../csv")
 
 local sample_path = script_dir .. "sample_column_mapping.csv"
 
-local f = assert(io.open(sample_path, "wb"))
-f:write([[
+fs.writeFile(sample_path, [[
 User ID,First Name,Age,Active
 101,Daniel,30,true
 102,Alex,25,false
 ]])
-f:close()
 
 local file = assert(csv.open(sample_path, {
     strict = true,

@@ -1,21 +1,20 @@
--- tests/test_v03_options.lua
+-- tests/test_v3options.lua
 --
--- Simple v0.3 option tests for lua-csv.
+-- Simple v0.3 option tests for lua-csv (Luau/Lune version).
 -- Run from repo root:
 --
---     lua tests/test_v03_options.lua
+--     lune tests/test_v3options.lua
+--
+-- Lune changes:
+--   - Replaced debug.getinfo with process.cwd for path resolution
+--   - Replaced io.open with fs.writeFile
 
-local script_path = debug.getinfo(1, "S").source:sub(2)
-local script_dir = script_path:match("^(.*[\\/])") or ""
-local root_dir = script_dir:gsub("tests[\\/]*$", "")
+local fs = require("@lune/fs")
+local process = require("@lune/process")
 
-package.path =
-    root_dir .. "?.lua;" ..
-    root_dir .. "?/init.lua;" ..
-    root_dir .. "?\\init.lua;" ..
-    package.path
+local script_dir = process.cwd .. "/"
 
-local csv = require("csv")
+local csv = require("../csv")
 
 local function assert_equal(actual, expected, message)
     if actual ~= expected then
@@ -41,9 +40,7 @@ local function assert_false(value, message)
 end
 
 local function write_file(path, contents)
-    local f = assert(io.open(path, "wb"))
-    f:write(contents)
-    f:close()
+    fs.writeFile(path, contents)
 end
 
 -------------------------------------------------------------------------------

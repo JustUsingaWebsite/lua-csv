@@ -7,14 +7,15 @@
 -- Expected fixture path:
 --
 --     tests/fixtures/cleaned_assets.csv
+--
+-- Lune changes:
+--   - Replaced debug.getinfo with process.cwd for path resolution
 
-local script_path = debug.getinfo(1, "S").source:sub(2)
-local script_dir = script_path:match("^(.*[\\/])") or ""
-local root_dir = script_dir:gsub("tests[\\/]*$", "")
+local process = require("@lune/process")
 
-package.path = root_dir .. "?.lua;" .. package.path
+local script_dir = process.cwd .. "/"
 
-local csv = require("csv")
+local csv = require("../csv")
 
 local function assert_truthy(value, message)
     if not value then
@@ -22,7 +23,7 @@ local function assert_truthy(value, message)
     end
 end
 
-local fixture_path = script_dir .. "fixtures/cleaned_assets.csv"
+local fixture_path = script_dir .. "tests/fixtures/cleaned_assets.csv"
 
 local file = assert(csv.open(fixture_path, {
     header = true,
@@ -52,4 +53,4 @@ file:close()
 assert_truthy(row_count > 0, "expected at least one asset row")
 assert_truthy(first_row, "expected first row")
 
-print(("test_assets.lua: read %d asset rows successfully"):format(row_count))
+print("test_assets.lua: read " .. row_count .. " asset rows successfully")

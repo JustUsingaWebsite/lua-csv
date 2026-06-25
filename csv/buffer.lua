@@ -1,6 +1,10 @@
 -- csv/buffer.lua
 -- Streaming file buffer. Lets the parser search/sub strings while reading from
 -- disk in chunks instead of loading the entire CSV into memory.
+--
+-- Luau rewrite: uses Luau's built-in `buffer` type for mutable byte storage.
+-- This eliminates O(n^2) string concatenation and reduces GC pressure when
+-- reading large CSV files in chunks.
 
 local DEFAULT_BUFFER_BLOCK_SIZE = 1024 * 1024
 
@@ -8,7 +12,8 @@ local DEFAULT_BUFFER_BLOCK_SIZE = 1024 * 1024
 ---@field file file*?
 ---@field buffer_block_size integer
 ---@field buffer_start integer
----@field buffer string
+---@field buf buffer  -- Luau mutable byte buffer
+---@field len integer -- logical data length in buf
 local file_buffer = {}
 file_buffer.__index = file_buffer
 
@@ -19,12 +24,45 @@ function file_buffer.new(file, buffer_block_size)
     return setmetatable({
         file = file,
         buffer_block_size = buffer_block_size or DEFAULT_BUFFER_BLOCK_SIZE,
+        buf = buffer.create(0),
+        len = 0,
         buffer_start = 0,
-        buffer = "",
     }, file_buffer)
 end
 
+---Grow the internal Luau buffer to accommodate at least `needed` total bytes.
+---@param needed integer
+function file_buffer:_grow(needed)
+    local cap = buffer.len(self.buf)
+
+    if needed <= cap then
+        return
+    end
+
+    -- Amortized growth: double or use needed, whichever is larger
+    local newSize = math.max(needed, cap * 2)
+    local newBuf = buffer.create(newSize)
+
+    if self.len > 0 then
+        buffer.copy(newBuf, 0, self.buf, 0, self.len)
+    end
+
+    self.buf = newBuf
+end
+
+---Append a string to the internal buffer without creating intermediate strings.
+---@param s string
+function file_buffer:appendString(s)
+    local slen = #s
+    local newLen = self.len + slen
+
+    self:_grow(newLen)
+    buffer.writestring(self.buf, self.len, s)
+    self.len = newLen
+end
+
 ---Drop already-consumed bytes from the front of the buffer.
+---Uses buffer.copy to shift data in-place — no new string allocation.
 ---@param p integer Absolute parser position.
 function file_buffer:truncate(p)
     p = p - self.buffer_start
@@ -34,9 +72,23 @@ function file_buffer:truncate(p)
             self.buffer_block_size *
             math.floor((p - 1) / self.buffer_block_size)
 
-        self.buffer = self.buffer:sub(remove + 1)
+        local remaining = self.len - remove
+
+        if remaining > 0 then
+            -- Copy remaining bytes to the front of the buffer in-place
+            buffer.copy(self.buf, 0, self.buf, remove, remaining)
+        end
+
+        self.len = remaining
         self.buffer_start = self.buffer_start + remove
     end
+end
+
+---Get the current buffer content as a Lua string.
+---Only returns the logical length, not the full allocated capacity.
+---@return string
+function file_buffer:_asString()
+    return buffer.readstring(self.buf, 0, self.len)
 end
 
 ---Find a Lua pattern, extending the buffer from disk until found or EOF.
@@ -45,10 +97,12 @@ end
 ---@return integer?, integer?, string?
 function file_buffer:find(pattern, init)
     while true do
-        local first, last, capture =
-            self.buffer:find(pattern, init - self.buffer_start)
+        local str = self:_asString()
 
-        if not first or last == #self.buffer then
+        local first, last, capture =
+            str:find(pattern, init - self.buffer_start)
+
+        if not first or last == self.len then
             local s = self.file and self.file:read(self.buffer_block_size)
 
             if not s then
@@ -61,7 +115,7 @@ function file_buffer:find(pattern, init)
                     capture
             end
 
-            self.buffer = self.buffer .. s
+            self:appendString(s)
         else
             return first + self.buffer_start,
                 last + self.buffer_start,
@@ -73,7 +127,7 @@ end
 ---Ensure buffer contains bytes up to the requested absolute offset.
 ---@param offset integer
 function file_buffer:extend(offset)
-    local extra = offset - #self.buffer - self.buffer_start
+    local extra = offset - self.len - self.buffer_start
 
     if extra > 0 then
         local size =
@@ -86,7 +140,7 @@ function file_buffer:extend(offset)
             return
         end
 
-        self.buffer = self.buffer .. s
+        self:appendString(s)
     end
 end
 
@@ -99,7 +153,7 @@ function file_buffer:sub(a, b)
 
     b = b == -1 and b or b - self.buffer_start
 
-    return self.buffer:sub(a - self.buffer_start, b)
+    return self:_asString():sub(a - self.buffer_start, b)
 end
 
 function file_buffer:close()

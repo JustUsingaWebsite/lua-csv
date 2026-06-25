@@ -1,7 +1,9 @@
 -- csv/validate.lua
 -- Validation helper. Opens a CSV file and reads through it to catch parser errors.
+--
+-- Luau/Lune rewrite: uses Luau string interpolation in error messages.
 
-local parser = require("csv.parser")
+local parser = require("./parser")
 
 local validate = {}
 

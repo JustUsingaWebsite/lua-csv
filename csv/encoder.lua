@@ -1,5 +1,11 @@
 -- csv/encoder.lua
 -- CSV encoding and writer support.
+--
+-- Luau/Lune rewrite:
+--   - Writer uses Lune's fs.writeFile when available
+--   - Falls back to io.open for pure Lua compatibility
+--   - Uses Luau string interpolation
+
 local encoder = {}
 
 ---Encode one field. Quote only when required by CSV rules.
@@ -70,16 +76,40 @@ function encoder.encode(rows, parameters)
     return table.concat(out, newline)
 end
 
+-- Detect Lune fs availability
+local fs = nil
+local has_lune_fs = false
+
+do
+    local ok, lune_fs = pcall(function()
+        return require("@lune/fs")
+    end)
+
+    if ok then
+        fs = lune_fs
+        has_lune_fs = true
+    end
+end
+
 local writer_mt = {}
 writer_mt.__index = writer_mt
 
 function writer_mt:write(row)
-    self.file:write(encoder.encode_row(row, self.parameters))
-    self.file:write(self.parameters.newline or "\r\n")
+    self.chunks[#self.chunks + 1] = encoder.encode_row(row, self.parameters)
 end
 
 function writer_mt:close()
-    self.file:close()
+    local content = table.concat(self.chunks, self.parameters.newline or "\r\n")
+
+    if has_lune_fs then
+        -- Lune path: write file using fs.writeFile (supports string and buffer)
+        fs.writeFile(self.filename, content)
+    elseif self.file then
+        -- Lua fallback path: write through file handle
+        self.file:write(content)
+        self.file:close()
+        self.file = nil
+    end
 end
 
 ---Create a CSV writer object.
@@ -89,15 +119,31 @@ end
 function encoder.writer(filename, parameters)
     parameters = parameters or {}
 
-    local file, message = io.open(filename, "wb")
+    if not has_lune_fs then
+        -- Lua fallback: open file immediately for incremental writes
+        local file, message = io.open(filename, "wb")
 
-    if not file then
-        return nil, message
+        if not file then
+            return nil, message
+        end
+
+        local out = setmetatable({
+            filename = filename,
+            file = file,
+            parameters = parameters,
+            chunks = {},
+        }, writer_mt)
+
+        ---@cast out CsvWriter
+        return out, nil
     end
 
+    -- Lune path: buffer chunks and write all at once on close
     local out = setmetatable({
-        file = file,
+        filename = filename,
+        file = nil,
         parameters = parameters,
+        chunks = {},
     }, writer_mt)
 
     ---@cast out CsvWriter

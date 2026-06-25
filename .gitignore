@@ -10,4 +10,10 @@ examples/output.csv
 tests/sample_test.csv
 tests/writer_output.csv
 
+# CWD temp files (tests write here when run from project root)
+sample_test.csv
+writer_output.csv
+output.csv
+
 .vscode/
+.rokit/

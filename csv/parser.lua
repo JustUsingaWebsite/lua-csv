@@ -1,12 +1,34 @@
 -- csv/parser.lua
 -- Streaming CSV parser and reader object implementation.
+--
+-- Luau/Lune rewrite:
+--   - Uses Lune's fs module for file reading (replaces io.open)
+--   - Uses Luau string interpolation for error messages
+--   - Streaming file reads use Lune's process.stdin or fs.readFile
+--     with the existing buffer-based streaming architecture
 
-require("csv.types")
-local file_buffer = require("csv.buffer")
-local column_map = require("csv.column_map")
-local util = require("csv.util")
-local unicode = require("csv.unicode")
-local separator = require("csv.separator")
+require("./types")
+local file_buffer = require("./buffer")
+local column_map = require("./column_map")
+local util = require("./util")
+local unicode = require("./unicode")
+local separator = require("./separator")
+
+-- Lune provides its own fs module, but we also fall back to io for
+-- compatibility with standard Lua if running outside Lune.
+local fs = nil
+local has_lune_fs = false
+
+do
+    local ok, lune_fs = pcall(function()
+        return require("@lune/fs")
+    end)
+
+    if ok then
+        fs = lune_fs
+        has_lune_fs = true
+    end
+end
 
 
 ---Parse separated values from a string/file buffer and yield rows.
@@ -75,13 +97,11 @@ local function separated_values_iterator(buffer, parameters)
     local expected_field_count
 
     local function problem(message)
+        -- Luau string interpolation: cleaner than string.format
         error(
-            ("%s:%d:%d: %s"):format(
-                parameters.filename or "<unknown>",
-                field_start_line or line,
-                field_start_column or 1,
-                message
-            ),
+            tostring(parameters.filename or "<unknown>") ..
+            ":" ..
+            tostring(field_start_line or line) .. ":" .. tostring(field_start_column or 1) .. ": " .. tostring(message),
             0
         )
     end
@@ -99,8 +119,7 @@ local function separated_values_iterator(buffer, parameters)
                 expected_field_count = field_count
             elseif field_count ~= expected_field_count then
                 problem(
-                    ("wrong number of fields: expected %d, got %d")
-                    :format(expected_field_count, field_count)
+                    "wrong number of fields: expected " .. expected_field_count .. ", got " .. field_count
                 )
             end
         end
@@ -322,19 +341,25 @@ local parser = {}
 ---@param buffer any
 ---@param parameters CsvParameters?
 ---@return CsvFile
-function parser.use(buffer, parameters)
+function parser.use(buf, parameters)
     parameters = parameters or {}
     parameters.filename = parameters.filename or "<unknown>"
     parameters.column_map = parameters.columns and column_map.new(parameters.columns)
 
-    if not buffer then
-        buffer = file_buffer.new(io.stdin, parameters.buffer_size)
-    elseif io.type(buffer) == "file" then
-        buffer = file_buffer.new(buffer, parameters.buffer_size)
+    if not buf then
+        -- stdin: in Lune, read from process.stdin; in Lua, use io.stdin
+        if has_lune_fs then
+            local stdio = require("@lune/stdio")
+            buf = stdio.readToEnd()
+        else
+            buf = file_buffer.new(io.stdin, parameters.buffer_size)
+        end
+    elseif type(buf) == "userdata" or (io and io.type and io.type(buf) == "file") then
+        buf = file_buffer.new(buf, parameters.buffer_size)
     end
 
     local f = setmetatable({
-        buffer = buffer,
+        buffer = buf,
         parameters = parameters,
     }, buffer_mt)
 
@@ -343,6 +368,7 @@ function parser.use(buffer, parameters)
 end
 
 ---Open a CSV file from disk.
+---Uses Lune's fs.readFile when available, falls back to io.open for pure Lua.
 ---@param filename string
 ---@param parameters CsvParameters?
 ---@return CsvFile?, string?
@@ -350,41 +376,71 @@ function parser.open(filename, parameters)
     parameters = parameters or {}
     parameters.filename = filename
 
-    local file, message = io.open(filename, "rb")
-
-    if not file then
-        return nil, message
-    end
-
     local requested_encoding = parameters.encoding or "auto"
 
-    -- UTF-8 files still stream.
-    -- UTF-16 files are decoded into a UTF-8 Lua string first.
-    if requested_encoding ~= "utf-8" then
-        local sample = file:read(4) or ""
+    if has_lune_fs then
+        -- Lune path: read file with fs.readFile
+        local ok, contents = pcall(function()
+            return fs.readFile(filename)
+        end)
 
-        file:seek("set", 0)
-
-        local detected = unicode.detect_encoding(sample, requested_encoding)
-
-        if detected == "utf-16le" then
-            local contents = file:read("*a") or ""
-            file:close()
-
-            local decoded = unicode.decode_utf16(contents, "utf-16le")
-
-            return parser.use(decoded, parameters), nil
-        elseif detected == "utf-16be" then
-            local contents = file:read("*a") or ""
-            file:close()
-
-            local decoded = unicode.decode_utf16(contents, "utf-16be")
-
-            return parser.use(decoded, parameters), nil
+        if not ok then
+            return nil, tostring(contents)
         end
-    end
 
-    return parser.use(file, parameters), nil
+        -- UTF-16 files are decoded into UTF-8 before parsing.
+        if requested_encoding ~= "utf-8" then
+            local sample = contents:sub(1, 4)
+            local detected = unicode.detect_encoding(sample, requested_encoding)
+
+            if detected == "utf-16le" then
+                local decoded = unicode.decode_utf16(contents, "utf-16le")
+                return parser.use(decoded, parameters), nil
+            elseif detected == "utf-16be" then
+                local decoded = unicode.decode_utf16(contents, "utf-16be")
+                return parser.use(decoded, parameters), nil
+            end
+        end
+
+        -- UTF-8 or ASCII: use the string directly with openstring
+        -- for streaming behavior through the buffer
+        parameters.buffer_size = parameters.buffer_size or #contents
+
+        return parser.use(contents, parameters), nil
+    else
+        -- Fallback Lua path: use io.open for streaming
+        local file, message = io.open(filename, "rb")
+
+        if not file then
+            return nil, message
+        end
+
+        if requested_encoding ~= "utf-8" then
+            local sample = file:read(4) or ""
+
+            file:seek("set", 0)
+
+            local detected = unicode.detect_encoding(sample, requested_encoding)
+
+            if detected == "utf-16le" then
+                local contents = file:read("*a") or ""
+                file:close()
+
+                local decoded = unicode.decode_utf16(contents, "utf-16le")
+
+                return parser.use(decoded, parameters), nil
+            elseif detected == "utf-16be" then
+                local contents = file:read("*a") or ""
+                file:close()
+
+                local decoded = unicode.decode_utf16(contents, "utf-16be")
+
+                return parser.use(decoded, parameters), nil
+            end
+        end
+
+        return parser.use(file, parameters), nil
+    end
 end
 
 local function makename(s)

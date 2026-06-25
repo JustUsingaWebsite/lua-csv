@@ -1,8 +1,8 @@
-require("csv.types")
+require("./csv/types")
 
-local parser = require("csv.parser")
-local encoder = require("csv.encoder")
-local validate = require("csv.validate")
+local parser = require("./csv/parser")
+local encoder = require("./csv/encoder")
+local validate = require("./csv/validate")
 
 local csv = {
     open = parser.open,

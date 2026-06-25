@@ -1,21 +1,20 @@
 -- tests/test_utf16.lua
 --
--- UTF-16 tests for lua-csv.
+-- UTF-16 tests for lua-csv (Luau/Lune version).
 -- Run from repo root:
 --
---     lua tests/test_utf16.lua
+--     lune tests/test_utf16.lua
+--
+-- Lune changes:
+--   - Replaced debug.getinfo with process.cwd for path resolution
+--   - Replaced io.open with fs.writeFile
 
-local script_path = debug.getinfo(1, "S").source:sub(2)
-local script_dir = script_path:match("^(.*[\\/])") or ""
-local root_dir = script_dir:gsub("tests[\\/]*$", "")
+local fs = require("@lune/fs")
+local process = require("@lune/process")
 
-package.path =
-    root_dir .. "?.lua;" ..
-    root_dir .. "?/init.lua;" ..
-    root_dir .. "?\\init.lua;" ..
-    package.path
+local script_dir = process.cwd .. "/"
 
-local csv = require("csv")
+local csv = require("../csv")
 
 local function assert_equal(actual, expected, message)
     if actual ~= expected then
@@ -29,9 +28,7 @@ local function assert_equal(actual, expected, message)
 end
 
 local function write_file(path, contents)
-    local f = assert(io.open(path, "wb"))
-    f:write(contents)
-    f:close()
+    fs.writeFile(path, contents)
 end
 
 local function ascii_to_utf16le(s, with_bom)

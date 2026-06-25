@@ -1,5 +1,5 @@
 {
-  "Lua.runtime.version": "Lua 5.4",
+  "Lua.runtime.version": "Luau",
   "Lua.workspace.checkThirdParty": false,
   "Lua.diagnostics.globals": [],
   "Lua.hint.enable": true,

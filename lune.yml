@@ -1,0 +1,8 @@
+{
+  "runtime": {
+    "version": "0.8.x"
+  },
+  "typecheck": {
+    "mode": "strict"
+  }
+}

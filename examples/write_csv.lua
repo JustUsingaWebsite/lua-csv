@@ -5,14 +5,15 @@
 --
 -- Also shows that commas, quotes, and embedded newlines are escaped
 -- automatically when writing CSV fields.
+--
+-- Lune changes:
+--   - Replaced debug.getinfo with process.cwd
 
-local script_path = debug.getinfo(1, "S").source:sub(2)
-local script_dir = script_path:match("^(.*[\\/])") or ""
-local root_dir = script_dir:gsub("examples[\\/]*$", "")
+local process = require("@lune/process")
 
-package.path = root_dir .. "?.lua;" .. package.path
+local script_dir = process.cwd .. "/"
 
-local csv = require("csv")
+local csv = require("../csv")
 
 local output_path = script_dir .. "output.csv"
 

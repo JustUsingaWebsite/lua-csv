@@ -5,14 +5,15 @@
 -- a generated string, or another source that is not a file on disk.
 --
 -- Uses csv.decode() and returns all rows at once.
+--
+-- Lune changes:
+--   - Replaced debug.getinfo with process.cwd
 
-local script_path = debug.getinfo(1, "S").source:sub(2)
-local script_dir = script_path:match("^(.*[\\/])") or ""
-local root_dir = script_dir:gsub("examples[\\/]*$", "")
+local process = require("@lune/process")
 
-package.path = root_dir .. "?.lua;" .. package.path
+local script_dir = process.cwd .. "/"
 
-local csv = require("csv")
+local csv = require("../csv")
 
 local text = [[
 id,name,role
@@ -30,18 +31,8 @@ for i, row in ipairs(rows) do
     print(i, row.id, row.name, row.role)
 end
 
---[[
-
-local script_path = debug.getinfo(1, "S").source:sub(2)
-local script_dir = script_path:match("^(.*[\\/])") or ""
-local root_dir = script_dir:gsub("examples[\\/]*$", "")
-
-package.path = root_dir .. "?.lua;" .. package.path
-
-local csv = require("csv")
-
 -------------------------------------------------------------------------------
--- Encode Lua rows into CSV text
+-- Encode Lua rows into CSV text, then decode back
 -------------------------------------------------------------------------------
 
 local csv_text = csv.encode({
@@ -60,7 +51,7 @@ print(csv_text)
 -- Decode the generated CSV text back into Lua tables
 -------------------------------------------------------------------------------
 
-local rows = csv.decode(csv_text, {
+local decoded_rows = csv.decode(csv_text, {
     header = true,
     strict = true,
 })
@@ -68,8 +59,6 @@ local rows = csv.decode(csv_text, {
 print("")
 print("Decoded rows:")
 
-for i, row in ipairs(rows) do
+for i, row in ipairs(decoded_rows) do
     print(i, row.id, row.name, row.role)
 end
-
-]]
