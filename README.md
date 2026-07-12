@@ -1,12 +1,12 @@
 # lua-csv
 
-Fast streaming CSV reader/writer for Lua 5.1–5.4, LuaJIT, and Luau (Lune).
+Fast CSV reader/writer optimized for Luau through Lune.
 
 `lua-csv` supports CSV parsing, header rows, strict validation, embedded quoted newlines, UTF-8 BOM stripping, UTF-16LE/UTF-16BE decoding, custom single-character separators, CSV validation, and CSV encoding/writing.
 
 ## Features
 
-- Streaming CSV reader for large UTF-8 files
+- Fast single-pass CSV reader for UTF-8 strings and Lune file input
 - CSV writer and encoder
 - Header-based row access
 - Strict validation mode
@@ -236,7 +236,7 @@ encoding = "utf-16le"
 encoding = "utf-16be"
 ```
 
-UTF-8 files are streamed directly. UTF-16 files are currently decoded into UTF-8 in memory before parsing.
+When running under Lune, files are read with `@lune/fs.readFile` and then parsed from memory. UTF-16 files are decoded into UTF-8 in memory before parsing.
 
 ## Column Mapping
 
@@ -335,6 +335,57 @@ local rows = csv.decode("id,email\n1,\n", {
 print(rows[1].email) -- nil
 ```
 
+### Select only some columns
+
+Use `select` to return only the columns your script needs. With `header = true`, pass header names. Without headers, pass physical column indexes.
+
+```lua
+local csv = require("csv")
+
+local rows = csv.decode("id,name,email,role\n1,Daniel,d@example.com,Admin\n", {
+    header = true,
+    select = { "id", "role" },
+})
+
+print(rows[1].id, rows[1].role)
+print(rows[1].name) -- nil
+```
+
+### Return field positions
+
+By default the reader only returns row data. Enable `positions` when you need the starting line and column for each field.
+
+```lua
+local csv = require("csv")
+
+local file = csv.openstring("id,name\n1,Daniel\n", {
+    header = true,
+    positions = true,
+})
+
+local row, starts = file:read()
+
+print(row.name) -- "Daniel"
+print(starts.name.line, starts.name.column) -- 2, 3
+```
+
+### Reuse row tables
+
+For high-throughput iteration, `reuse_record` reuses the same row table between reads. Do not store rows from `file:lines()` or `file:read()` when this is enabled unless you copy them first. `readall()` copies rows before storing them.
+
+```lua
+local csv = require("csv")
+
+local file = csv.open("users.csv", {
+    header = true,
+    reuse_record = true,
+})
+
+for row in file:lines() do
+    print(row.id, row.name)
+end
+```
+
 ## API
 
 ### Reading
@@ -350,8 +401,8 @@ csv.validate_string(text, parameters) -- validate CSV string
 ### Reader methods
 
 ```lua
-file:lines()    -- iterator over rows
-file:read()     -- read one row
+file:lines()    -- iterator over rows, plus positions when positions=true
+file:read()     -- read one row, plus positions when positions=true
 file:readall()  -- read all rows into memory
 file:close()    -- close file
 file:name()     -- return filename
@@ -383,8 +434,10 @@ writer:close()
     strict = true,                -- validate field counts
     skip_blank_lines = true,      -- skip blank rows
     duplicate_headers = "error",  -- error on duplicate headers
-    buffer_size = 1024 * 1024,    -- streaming buffer size
     record_limit = nil,           -- optional max rows to read
+    select = nil,                  -- optional header names or column indexes
+    positions = false,            -- return field start metadata
+    reuse_record = false,         -- reuse row table during iteration
 
     newline = "\r\n",             -- writer newline
     quote_all = false,            -- writer: quote every field
@@ -415,20 +468,16 @@ Separators must be a single character.
 * UTF-8 BOM is stripped automatically.
 * UTF-16LE and UTF-16BE input are supported.
 * UTF-16 input is decoded into UTF-8 before parsing.
-* UTF-8 files are streamed directly.
-* UTF-16 files are currently decoded into memory before parsing.
+* Lune file input is read into memory with `@lune/fs.readFile`.
 * Multi-character separators are not supported.
+* `select` reduces returned columns, but the parser still scans all fields to preserve CSV correctness and strict validation.
 * Rows are returned as strings unless transformed through `columns`.
 * The parser uses coroutines internally for streaming iteration.
-* `file:lines()` yields row data and field position metadata internally.
-* When running under Lune, file I/O uses `@lune/fs` and stdin uses `@lune/stdio`. Standard Lua fallbacks (`io.open`) are used when Lune is not available.
+* `file:lines()` and `file:read()` return field position metadata only when `positions = true`.
+* When running under Lune, file I/O uses `@lune/fs` and stdin uses `@lune/stdio`. Standard Lua fallbacks read `io` handles into memory before parsing.
 
 ## Supported Lua Versions
 
-* Lua 5.1
-* Lua 5.2
-* Lua 5.3
-* Lua 5.4
-* LuaJIT
 * Luau (via [Lune](https://lune-org.github.io))
+* Lua 5.1-5.4 and LuaJIT are compatibility targets, but this branch is optimized and tested primarily on Lune.
 

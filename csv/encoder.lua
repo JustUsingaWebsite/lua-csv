@@ -6,7 +6,30 @@
 --   - Falls back to io.open for pure Lua compatibility
 --   - Uses Luau string interpolation
 
+local util = require("./util")
+
 local encoder = {}
+
+local find, gsub = string.find, string.gsub
+
+-- Cache one "does this field need quoting" pattern per separator character,
+-- so repeated calls to encode_field with the same separator (the normal
+-- case - one writer, one separator, many rows) don't rebuild the pattern
+-- or run four separate find() calls per field.
+local quote_pattern_cache = {}
+
+local function quote_pattern_for(separator)
+    local cached = quote_pattern_cache[separator]
+
+    if cached then
+        return cached
+    end
+
+    local pattern = '[' .. util.escape_pattern_class_char(separator) .. '"\r\n]'
+    quote_pattern_cache[separator] = pattern
+
+    return pattern
+end
 
 ---Encode one field. Quote only when required by CSV rules.
 ---@param value any
@@ -24,13 +47,10 @@ local function encode_field(value, separator, parameters)
 
     local must_quote =
         parameters.quote_all or
-        value:find(separator, 1, true) or
-        value:find('"', 1, true) or
-        value:find("\r", 1, true) or
-        value:find("\n", 1, true)
+        find(value, quote_pattern_for(separator)) ~= nil
 
     if must_quote then
-        value = value:gsub('"', '""')
+        value = gsub(value, '"', '""')
         return '"' .. value .. '"'
     end
 

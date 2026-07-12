@@ -8,6 +8,8 @@
 
 local DEFAULT_BUFFER_BLOCK_SIZE = 1024 * 1024
 
+local sfind, ssub = string.find, string.sub
+
 ---@class CsvFileBuffer
 ---@field file file*?
 ---@field buffer_block_size integer
@@ -100,7 +102,7 @@ function file_buffer:find(pattern, init)
         local str = self:_asString()
 
         local first, last, capture =
-            str:find(pattern, init - self.buffer_start)
+            sfind(str, pattern, init - self.buffer_start)
 
         if not first or last == self.len then
             local s = self.file and self.file:read(self.buffer_block_size)
@@ -153,7 +155,7 @@ function file_buffer:sub(a, b)
 
     b = b == -1 and b or b - self.buffer_start
 
-    return self:_asString():sub(a - self.buffer_start, b)
+    return ssub(self:_asString(), a - self.buffer_start, b)
 end
 
 function file_buffer:close()

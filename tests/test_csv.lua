@@ -196,4 +196,156 @@ User ID,First Name,Age
     assert_equal(rows[1].age, 30)
 end
 
+-------------------------------------------------------------------------------
+-- Test: header select returns only requested columns
+-------------------------------------------------------------------------------
+
+do
+    local rows = csv.decode([[
+id,name,email,role
+1,Daniel,daniel@example.com,Admin
+2,Alex,alex@example.com,Editor
+]], {
+        header = true,
+        strict = true,
+        select = { "id", "role" },
+    })
+
+    assert_equal(#rows, 2)
+    assert_equal(rows[1].id, "1")
+    assert_equal(rows[1].role, "Admin")
+    assert_equal(rows[1].name, nil)
+    assert_equal(rows[1].email, nil)
+    assert_equal(rows[2].role, "Editor")
+end
+
+-------------------------------------------------------------------------------
+-- Test: numeric select returns only requested physical columns
+-------------------------------------------------------------------------------
+
+do
+    local rows = csv.decode([[
+a,b,c,d
+1,2,3,4
+]], {
+        strict = true,
+        select = { 1, 3 },
+    })
+
+    assert_equal(#rows, 2)
+    assert_equal(rows[1][1], "a")
+    assert_equal(rows[1][2], nil)
+    assert_equal(rows[1][3], "c")
+    assert_equal(rows[2][1], "1")
+    assert_equal(rows[2][3], "3")
+end
+
+-------------------------------------------------------------------------------
+-- Test: select still lets strict count skipped fields
+-------------------------------------------------------------------------------
+
+do
+    local ok, err = csv.validate_string([[
+id,name,email
+1,Daniel,daniel@example.com
+2,Alex
+]], {
+        header = true,
+        strict = true,
+        select = { "id" },
+    })
+
+    assert_equal(ok, false)
+    assert_equal(type(err), "string")
+end
+
+-------------------------------------------------------------------------------
+-- Test: columns mapping acts as implicit projection
+-------------------------------------------------------------------------------
+
+do
+    local rows = csv.decode([[
+id,name,age,unused
+1,Daniel,30,skip
+]], {
+        strict = true,
+
+        columns = {
+            age = {
+                name = "age",
+                transform = tonumber,
+            },
+        },
+    })
+
+    assert_equal(#rows, 1)
+    assert_equal(rows[1].age, 30)
+    assert_equal(rows[1].id, nil)
+    assert_equal(rows[1].name, nil)
+    assert_equal(rows[1].unused, nil)
+end
+
+-------------------------------------------------------------------------------
+-- Test: optional field positions
+-------------------------------------------------------------------------------
+
+do
+    local file = csv.openstring([[
+id,name
+1,Daniel
+]], {
+        header = true,
+        strict = true,
+        positions = true,
+    })
+
+    local row, starts = file:read()
+    file:close()
+
+    assert_equal(row.id, "1")
+    assert_equal(starts.id.line, 2)
+    assert_equal(starts.id.column, 1)
+    assert_equal(starts.name.line, 2)
+    assert_equal(starts.name.column, 3)
+end
+
+-------------------------------------------------------------------------------
+-- Test: reuse_record reuses iterator row but readall copies rows
+-------------------------------------------------------------------------------
+
+do
+    local file = csv.openstring([[
+id,name
+1,Daniel
+2,Alex
+]], {
+        header = true,
+        strict = true,
+        reuse_record = true,
+    })
+
+    local first = file:read()
+    local second = file:read()
+    file:close()
+
+    assert_equal(first, second, "reuse_record should reuse the row table")
+    assert_equal(second.id, "2")
+    assert_equal(second.name, "Alex")
+
+    local rows = csv.decode([[
+id,name
+1,Daniel
+2,Alex
+]], {
+        header = true,
+        strict = true,
+        reuse_record = true,
+    })
+
+    assert_equal(#rows, 2)
+    assert_equal(rows[1].id, "1")
+    assert_equal(rows[2].id, "2")
+    assert_equal(rows[1] == rows[2], false, "readall should copy reused rows")
+end
+
 print("test_csv.lua: all tests passed")

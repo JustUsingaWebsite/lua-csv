@@ -5,11 +5,32 @@
 
 local util = {}
 
+local byte, sub = string.byte, string.sub
+
+-- Whitespace bytes matched by Lua's %s pattern class: space, \t, \n, \v, \f, \r
+local function is_space_byte(b)
+    return b == 32 or (b >= 9 and b <= 13)
+end
+
 ---Trim leading and trailing whitespace from an unquoted CSV field.
+---Hand-rolled byte scan instead of a "^%s*(.-)%s*$" pattern match: the lazy
+---capture in that pattern backtracks through the pattern engine, which is
+---measurably slower than a direct scan since this runs on every field by
+---default (trim_fields defaults to true).
 ---@param s string
 ---@return string
 function util.trim_space(s)
-    return s:match("^%s*(.-)%s*$")
+    local i, j = 1, #s
+
+    while i <= j and is_space_byte(byte(s, i)) do
+        i = i + 1
+    end
+
+    while j >= i and is_space_byte(byte(s, j)) do
+        j = j - 1
+    end
+
+    return sub(s, i, j)
 end
 
 ---Unescape doubled quotes inside a quoted field and remove the closing quote.

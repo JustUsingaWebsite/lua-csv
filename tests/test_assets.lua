@@ -23,7 +23,7 @@ local function assert_truthy(value, message)
     end
 end
 
-local fixture_path = script_dir .. "\\fixtures\\cleaned_assets.csv"
+local fixture_path = script_dir .. "\\tests\\fixtures\\cleaned_assets.csv"
 
 local file = assert(csv.open(fixture_path, {
     header = true,

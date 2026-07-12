@@ -4,11 +4,11 @@
 -- Luau/Lune rewrite:
 --   - Uses Lune's fs module for file reading (replaces io.open)
 --   - Uses Luau string interpolation for error messages
---   - Streaming file reads use Lune's process.stdin or fs.readFile
---     with the existing buffer-based streaming architecture
+--   - Lune file reads use fs.readFile, then parse the in-memory string
+--   - The parser hot path scans byte positions directly instead of using
+--     repeated Lua patterns and buffer-to-string conversions
 
 require("./types")
-local file_buffer = require("./buffer")
 local column_map = require("./column_map")
 local util = require("./util")
 local unicode = require("./unicode")
@@ -31,51 +31,49 @@ do
 end
 
 
----Parse separated values from a string/file buffer and yield rows.
----@param buffer any
+-- Localized library functions: calling string.byte(s, i) directly is faster
+-- than s:byte(i) in Luau, since method syntax goes through metatable
+-- resolution while a direct/localized call can hit the builtin fastcall path.
+-- This module's hot loop calls byte() once per character of the input, so
+-- this matters a lot here.
+local byte, sub, find, gsub = string.byte, string.sub, string.find, string.gsub
+
+-- Luau's table.clear/table.clone are native (C-implemented) and avoid the
+-- Lua-level pairs() loop the hand-rolled versions used.
+local clear_table = table.clear
+local copy_table = table.clone
+
+local function make_numeric_select(select)
+    if not select then
+        return nil
+    end
+
+    local indexes = {}
+
+    for _, index in ipairs(select) do
+        if type(index) == "number" then
+            indexes[index] = true
+        end
+    end
+
+    if next(indexes) then
+        return indexes
+    end
+
+    return nil
+end
+
+---Parse separated values from a string and yield rows.
+---@param data string
 ---@param parameters CsvParameters
-local function separated_values_iterator(buffer, parameters)
-    local field_start = 1
-    local advance
-
-    if buffer.truncate then
-        advance = function(n)
-            field_start = field_start + n
-            buffer:truncate(field_start)
-        end
-    else
-        advance = function(n)
-            field_start = field_start + n
-        end
+local function separated_values_iterator(data, parameters)
+    if type(data) ~= "string" then
+        error("csv parser expects string input in Lune mode", 0)
     end
-
-    -- Return text relative to current field_start.
-    local function field_sub(a, b)
-        b = b == -1 and b or b + field_start - 1
-        return buffer:sub(a + field_start - 1, b)
-    end
-
-    -- Find a pattern relative to current field_start.
-    local function field_find(pattern, init)
-        init = init or 1
-
-        local f, l, c = buffer:find(pattern, init + field_start - 1)
-
-        if not f then
-            return
-        end
-
-        return f - field_start + 1,
-            l - field_start + 1,
-            c
-    end
-
-    local bom_skip = unicode.find_bom(field_sub)
-    advance(bom_skip)
 
     local raw_separator =
         parameters.separator or
-        separator.guess(buffer, separated_values_iterator)
+        separator.guess(data, separated_values_iterator)
 
     raw_separator = raw_separator or ","
 
@@ -83,18 +81,22 @@ local function separated_values_iterator(buffer, parameters)
         error("separator must be a single character", 0)
     end
 
-    local sep =
-        "([" ..
-        util.escape_pattern_class_char(raw_separator) ..
-        "\n\r])"
-
+    local len = #data
+    local sep_byte = byte(raw_separator, 1)
+    local pos = 1
     local line_start = 1
     local line = 1
-    local field_count, fields, starts, nonblanks = 0, {}, {}, false
+    local field_count = 0
+    local fields = parameters.reuse_record and {} or nil
+    local starts = parameters.positions and parameters.reuse_record and {} or nil
+    local nonblanks = false
     local header, header_read
     local field_start_line, field_start_column
     local record_count = 0
     local expected_field_count
+    local last_field_count
+    local selected_indexes = parameters.header and nil or make_numeric_select(parameters.select)
+    local selected_keys
 
     local function problem(message)
         -- Luau string interpolation: cleaner than string.format
@@ -104,6 +106,77 @@ local function separated_values_iterator(buffer, parameters)
             tostring(field_start_line or line) .. ":" .. tostring(field_start_column or 1) .. ": " .. tostring(message),
             0
         )
+    end
+
+    -- Once we've seen a full row, expected_field_count (in strict mode) or
+    -- the header's length tells us how many array slots each row needs.
+    -- Pre-sizing with table.create avoids repeated array-part growth as
+    -- fields are added one by one. This only helps the array-shaped case
+    -- (no header/column_map, where keys are 1..N) - with a header or
+    -- column map, fields is dictionary-shaped and table.create can't help.
+    local function row_size_hint()
+        if parameters.header or parameters.column_map then
+            return nil
+        end
+
+        return expected_field_count or last_field_count or (header and #header) or nil
+    end
+
+    local function new_row_table()
+        if parameters.reuse_record then
+            clear_table(fields)
+
+            if parameters.positions then
+                clear_table(starts)
+            end
+        else
+            local hint = row_size_hint()
+            fields = hint and table.create(hint) or {}
+            starts = parameters.positions and {} or nil
+        end
+    end
+
+    local function build_header_select()
+        if not parameters.select then
+            return
+        end
+
+        selected_indexes = {}
+        selected_keys = {}
+
+        local wanted = {}
+
+        for _, name in ipairs(parameters.select) do
+            if type(name) == "string" then
+                wanted[util.normalise_string(name)] = true
+            elseif type(name) == "number" then
+                selected_indexes[name] = true
+                selected_keys[name] = header[name]
+            end
+        end
+
+        for index, name in ipairs(header) do
+            if wanted[util.normalise_string(name)] then
+                selected_indexes[index] = true
+                selected_keys[index] = name
+            end
+        end
+    end
+
+    local function should_keep_field(index)
+        if not header_read and (parameters.header or parameters.column_map) then
+            return true
+        end
+
+        if parameters.column_map and header_read then
+            return parameters.column_map.index_map[index] ~= nil
+        end
+
+        if selected_indexes then
+            return selected_indexes[index] == true
+        end
+
+        return true
     end
 
     local function should_keep_record()
@@ -125,83 +198,68 @@ local function separated_values_iterator(buffer, parameters)
         end
     end
 
-    while true do
-        local field_end, sep_end, this_sep
-        local tidy
-
-        field_start_line = line
-        field_start_column = field_start - line_start + 1
-
-        if field_sub(1, 1) == '"' then
-            advance(1)
-
-            ---@type number?
-            local current_pos = 0
-
-            while true do
-                -- Find next quote. If followed by another quote, it is an
-                -- escaped quote (""). Otherwise it closes the quoted field.
-                local _, b, c = field_find('"("?)', current_pos + 1)
-
-                if not b then
-                    problem("unmatched quote")
-                end
-
-                current_pos = b
-
-                if c ~= '"' then
-                    break
-                end
-            end
-
-            tidy = util.fix_quotes
-
-            -- After a quoted field closes, only spaces then a separator/newline
-            -- are valid. Anything else is malformed CSV.
-            field_end, sep_end, this_sep =
-                field_find(" *([^ ])", current_pos + 1)
-
-            if this_sep and not this_sep:match(sep) then
-                problem("unexpected character after closing quote")
-            end
-        else
-            field_end, sep_end, this_sep = field_find(sep, 1)
-            if parameters.trim_fields == false then
-                tidy = function(s)
-                    return s
-                end
-            else
-                tidy = util.trim_space
-            end
+    local function normalize_newlines(value)
+        if find(value, "\r", 1, true) then
+            return gsub(gsub(value, "\r\n", "\n"), "\r", "\n")
         end
 
-        field_end = (field_end or 0) - 1
+        return value
+    end
 
-        local value = field_sub(1, field_end)
+    local function line_column_at(index)
+        return line, index - line_start + 1
+    end
 
-        value =
-            value
-            :gsub("\r\n", "\n")
-            :gsub("\r", "\n")
+    local function count_raw_newlines(start_index, end_index)
+        local scan = start_index
 
-        for nl in value:gmatch("\n()") do
-            line = line + 1
-            line_start = nl + field_start
+        while scan <= end_index do
+            local b = byte(data, scan)
+
+            if b == 13 then
+                if scan < end_index and byte(data, scan + 1) == 10 then
+                    scan = scan + 1
+                end
+
+                line = line + 1
+                line_start = scan + 1
+            elseif b == 10 then
+                line = line + 1
+                line_start = scan + 1
+            end
+
+            scan = scan + 1
         end
+    end
 
-        value = tidy(value)
+    local function add_position(key, keep)
+        if parameters.positions and keep and key then
+            starts[key] = {
+                line = field_start_line,
+                column = field_start_column,
+            }
+        end
+    end
 
+    local function add_field(value)
         if value ~= "" then
             nonblanks = true
         end
+
+        field_count = field_count + 1
+        local keep = should_keep_field(field_count)
+        local key
+
+        if not keep then
+            return
+        end
+
+        value = normalize_newlines(value)
 
         if parameters.empty_as_nil and value == "" then
             value = nil
         end
 
-        field_count = field_count + 1
-
-        local key
 
         if parameters.column_map and header_read then
             local ok
@@ -217,77 +275,187 @@ local function separated_values_iterator(buffer, parameters)
                 problem(value)
             end
         elseif header then
-            key = header[field_count]
+            key = selected_keys and selected_keys[field_count] or header[field_count]
         else
             key = field_count
         end
 
         if key then
             fields[key] = value
-            starts[key] = {
-                line = field_start_line,
-                column = field_start_column,
-            }
+            add_position(key, keep)
         end
+    end
 
-        if not this_sep or this_sep == "\r" or this_sep == "\n" then
-            if parameters.column_map and not header_read then
-                header_read = parameters.column_map:read_header(fields)
+    local function finish_record()
+        if parameters.column_map and not header_read then
+            header_read = parameters.column_map:read_header(fields)
 
-                if header_read and parameters.strict then
+            if header_read and parameters.strict then
+                expected_field_count = field_count
+            end
+        elseif parameters.header and not header_read then
+            if should_keep_record() then
+                if parameters.duplicate_headers == "error" then
+                    local seen = {}
+
+                    for _, name in ipairs(fields) do
+                        if seen[name] then
+                            problem("duplicate header: " .. tostring(name))
+                        end
+
+                        seen[name] = true
+                    end
+                end
+
+                if parameters.reuse_record then
+                    header = copy_table(fields)
+                else
+                    header = fields
+                end
+
+                header_read = true
+                build_header_select()
+
+                if parameters.strict then
                     expected_field_count = field_count
                 end
-            elseif parameters.header and not header_read then
-                if should_keep_record() then
-                    if parameters.duplicate_headers == "error" then
-                        local seen = {}
+            end
+        else
+            if should_keep_record() then
+                validate_field_count()
+                coroutine.yield(fields, starts)
 
-                        for _, name in ipairs(fields) do
-                            if seen[name] then
-                                problem("duplicate header: " .. tostring(name))
-                            end
+                record_count = record_count + 1
 
-                            seen[name] = true
-                        end
-                    end
-
-                    header = fields
-                    header_read = true
-
-                    if parameters.strict then
-                        expected_field_count = field_count
-                    end
+                if parameters.record_limit and record_count >= parameters.record_limit then
+                    return true
                 end
-            else
-                if should_keep_record() then
-                    validate_field_count()
-                    coroutine.yield(fields, starts)
+            end
+        end
 
-                    record_count = record_count + 1
+        return false
+    end
 
-                    if parameters.record_limit and record_count >= parameters.record_limit then
-                        break
+    local bom_skip = unicode.find_bom(function(a, b)
+        return sub(data, a, b)
+    end)
+
+    pos = bom_skip + 1
+    line_start = pos
+
+    new_row_table()
+
+    while pos <= len + 1 do
+        field_start_line, field_start_column = line_column_at(pos)
+
+        local value
+        local sep_pos
+        local sep_value
+
+        if pos <= len and byte(data, pos) == 34 then
+            local start = pos + 1
+            local scan = start
+            local parts
+            local quote_end
+
+            while true do
+                local quote = find(data, '"', scan, true)
+
+                if not quote then
+                    problem("unmatched quote")
+                end
+
+                if quote < len and byte(data, quote + 1) == 34 then
+                    if not parts then
+                        parts = {}
                     end
+
+                    parts[#parts + 1] = sub(data, scan, quote)
+                    scan = quote + 2
+                else
+                    if parts then
+                        parts[#parts + 1] = sub(data, scan, quote - 1)
+                        value = table.concat(parts)
+                    else
+                        value = sub(data, start, quote - 1)
+                    end
+
+                    quote_end = quote - 1
+                    scan = quote + 1
+                    break
                 end
             end
 
-            field_count, fields, starts, nonblanks = 0, {}, {}, false
+            count_raw_newlines(start, quote_end)
+
+            while scan <= len and byte(data, scan) == 32 do
+                scan = scan + 1
+            end
+
+            if scan <= len then
+                local b = byte(data, scan)
+
+                if b ~= sep_byte and b ~= 10 and b ~= 13 then
+                    problem("unexpected character after closing quote")
+                end
+
+                sep_pos = scan
+                sep_value = b
+            end
+        else
+            local start = pos
+            local scan = pos
+
+            while scan <= len do
+                local b = byte(data, scan)
+
+                if b == sep_byte or b == 10 or b == 13 then
+                    break
+                end
+
+                scan = scan + 1
+            end
+
+            value = sub(data, start, scan - 1)
+
+            if parameters.trim_fields ~= false then
+                value = util.trim_space(value)
+            end
+
+            if scan <= len then
+                sep_pos = scan
+                sep_value = byte(data, scan)
+            end
         end
 
-        if not sep_end then
-            break
-        end
+        add_field(value)
 
-        if this_sep == "\r" or this_sep == "\n" then
-            if this_sep == "\r" and field_sub(sep_end + 1, sep_end + 1) == "\n" then
-                sep_end = sep_end + 1
+        if not sep_value or sep_value == 10 or sep_value == 13 then
+            local stop = finish_record()
+
+            if stop then
+                break
+            end
+
+            if not sep_value then
+                break
+            end
+
+            local next_pos = sep_pos + 1
+
+            if sep_value == 13 and next_pos <= len and byte(data, next_pos) == 10 then
+                next_pos = next_pos + 1
             end
 
             line = line + 1
-            line_start = field_start + sep_end
+            line_start = next_pos
+            pos = next_pos
+            last_field_count = field_count
+            field_count, nonblanks = 0, false
+            new_row_table()
+        else
+            pos = sep_pos + 1
         end
-
-        advance(sep_end)
     end
 end
 
@@ -314,6 +482,10 @@ local buffer_mt = {
 
             if not row then
                 break
+            end
+
+            if t.parameters.reuse_record then
+                row = copy_table(row)
             end
 
             rows[#rows + 1] = row
@@ -352,10 +524,10 @@ function parser.use(buf, parameters)
             local stdio = require("@lune/stdio")
             buf = stdio.readToEnd()
         else
-            buf = file_buffer.new(io.stdin, parameters.buffer_size)
+            buf = io.stdin:read("*a") or ""
         end
     elseif type(buf) == "userdata" or (io and io.type and io.type(buf) == "file") then
-        buf = file_buffer.new(buf, parameters.buffer_size)
+        buf = buf:read("*a") or ""
     end
 
     local f = setmetatable({
